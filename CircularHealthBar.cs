@@ -14,19 +14,28 @@ public class CircularHealthBar : MonoBehaviour
     [SerializeField] private PlayerStamina playerStamina; // Optional
     
     [Header("Visual Settings")]
-    [SerializeField] private Color healthColor = new Color(1f, 0.2f, 0.2f); // Red
+    [SerializeField] private Color healthyColor = new Color(0.2f, 1f, 0.2f); // Green
+    [SerializeField] private Color lowHealthColor = new Color(1f, 0.2f, 0.2f); // Red
+    [SerializeField] private float lowHealthThreshold = 0.3f; // 30% health
     [SerializeField] private Color staminaColor = new Color(0.2f, 1f, 0.2f); // Green
     [SerializeField] private bool smoothTransition = true;
     [SerializeField] private float transitionSpeed = 5f;
+    [SerializeField] private bool smoothColorTransition = true; // NEW
+    [SerializeField] private float colorTransitionSpeed = 3f; // NEW
     
     private float targetHealthFill;
     private float targetStaminaFill;
-
+    private Color currentHealthColor; // NEW
+    private Color targetHealthColor; // NEW
+    
     void Start()
     {
-        // Set colors
+        // Set initial colors
+        currentHealthColor = healthyColor;
+        targetHealthColor = healthyColor;
+        
         if (healthFillImage != null)
-            healthFillImage.color = healthColor;
+            healthFillImage.color = healthyColor;
             
         if (staminaFillImage != null)
             staminaFillImage.color = staminaColor;
@@ -38,10 +47,10 @@ public class CircularHealthBar : MonoBehaviour
         if (playerStamina != null)
             playerStamina.OnStaminaChanged.AddListener(UpdateStamina);
     }
-
+    
     void Update()
     {
-        // Smooth transition
+        // Smooth fill amount transition
         if (smoothTransition)
         {
             if (healthFillImage != null)
@@ -62,8 +71,19 @@ public class CircularHealthBar : MonoBehaviour
                 );
             }
         }
+        
+        // Smooth color transition (NEW)
+        if (smoothColorTransition && healthFillImage != null)
+        {
+            currentHealthColor = Color.Lerp(
+                currentHealthColor,
+                targetHealthColor,
+                Time.deltaTime * colorTransitionSpeed
+            );
+            healthFillImage.color = currentHealthColor;
+        }
     }
-
+    
     public void UpdateHealth(float healthPercentage)
     {
         targetHealthFill = healthPercentage;
@@ -73,13 +93,30 @@ public class CircularHealthBar : MonoBehaviour
             healthFillImage.fillAmount = healthPercentage;
         }
         
+        // Update color based on threshold (NEW)
+        if (healthPercentage <= lowHealthThreshold)
+        {
+            targetHealthColor = lowHealthColor;
+        }
+        else
+        {
+            targetHealthColor = healthyColor;
+        }
+        
+        // Instant color change if smooth transition is off
+        if (!smoothColorTransition && healthFillImage != null)
+        {
+            healthFillImage.color = targetHealthColor;
+            currentHealthColor = targetHealthColor;
+        }
+        
         // Update text
         if (healthText != null && playerHealth != null)
         {
             healthText.text = Mathf.Ceil(playerHealth.GetCurrentHealth()).ToString();
         }
     }
-
+    
     public void UpdateStamina(float staminaPercentage)
     {
         targetStaminaFill = staminaPercentage;
@@ -89,7 +126,7 @@ public class CircularHealthBar : MonoBehaviour
             staminaFillImage.fillAmount = staminaPercentage;
         }
     }
-
+    
     void OnDestroy()
     {
         if (playerHealth != null)
