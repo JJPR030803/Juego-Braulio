@@ -24,6 +24,12 @@ public class PikminLauncher : MonoBehaviour
     [SerializeField] private GameObject pikminPrefab;
     [SerializeField] private Transform launchPoint; // Where pikmin spawns from
     
+    [Header("Limit Feedback")]
+    [SerializeField] private bool showLimitWarning = true;
+    [SerializeField] private Color limitReachedTrajectoryColor = Color.gray;
+    [SerializeField] private UnityEngine.UI.Text pikminCountText; // Optional UI text
+    [SerializeField] private GameObject limitReachedUI; // Optional UI panel to show when limit reached
+    
     [Header("Debug")]
     [SerializeField] private bool showDebugInfo = true;
     
@@ -210,14 +216,26 @@ public class PikminLauncher : MonoBehaviour
                 // Calculate launch velocity
                 launchVelocity = CalculateLaunchVelocity(launchPoint.position, targetPoint, arcHeight);
                 
+                // Check if we're at limit
+                bool atLimit = IsAtPikminLimit();
+                
                 // Draw trajectory
-                DrawTrajectory();
+                DrawTrajectory(atLimit);
                 
                 // Update landing marker
                 if (landingMarker != null)
                 {
                     landingMarker.transform.position = targetPoint;
+                    // Optional: Change landing marker color when at limit
+                    Renderer markerRenderer = landingMarker.GetComponent<Renderer>();
+                    if (markerRenderer != null)
+                    {
+                        markerRenderer.material.color = atLimit ? limitReachedTrajectoryColor : validTrajectoryColor;
+                    }
                 }
+                
+                // Update UI if available
+                UpdatePikminCountUI();
             }
             else
             {
@@ -256,6 +274,11 @@ public class PikminLauncher : MonoBehaviour
     
     void DrawTrajectory()
     {
+        DrawTrajectory(false);
+    }
+    
+    void DrawTrajectory(bool atLimit)
+    {
         if (trajectoryLine == null || !canLaunch) return;
         
         trajectoryLine.enabled = true;
@@ -291,16 +314,106 @@ public class PikminLauncher : MonoBehaviour
         System.Array.Resize(ref points, actualPointCount);
         trajectoryLine.SetPositions(points);
         
-        // Color based on validity
+        // Color based on validity and limit
         float distance = Vector3.Distance(launchPoint.position, targetPoint);
-        trajectoryLine.startColor = distance <= maxLaunchDistance ? validTrajectoryColor : invalidTrajectoryColor;
-        trajectoryLine.endColor = trajectoryLine.startColor;
+        Color trajectoryColor;
+        
+        if (atLimit)
+        {
+            trajectoryColor = limitReachedTrajectoryColor;
+        }
+        else if (distance <= maxLaunchDistance)
+        {
+            trajectoryColor = validTrajectoryColor;
+        }
+        else
+        {
+            trajectoryColor = invalidTrajectoryColor;
+        }
+        
+        trajectoryLine.startColor = trajectoryColor;
+        trajectoryLine.endColor = trajectoryColor;
+    }
+    
+    bool IsAtPikminLimit()
+    {
+        if (PikminManager.Instance != null)
+        {
+            return !PikminManager.Instance.CanRegisterMorePikmin();
+        }
+        return false;
+    }
+    
+    void UpdatePikminCountUI()
+    {
+        if (pikminCountText != null && PikminManager.Instance != null)
+        {
+            int current = PikminManager.Instance.GetPikminCount();
+            int max = PikminManager.Instance.GetMaxPikmin();
+            pikminCountText.text = $"Pikmin: {current}/{max}";
+            
+            // Optional: Change color when near limit
+            if (current >= max)
+            {
+                pikminCountText.color = limitReachedTrajectoryColor;
+            }
+            else if (current >= max * 0.9f) // 90% full
+            {
+                pikminCountText.color = Color.yellow;
+            }
+            else
+            {
+                pikminCountText.color = Color.white;
+            }
+        }
     }
     
     void LaunchPikmin()
     {
         if (pikminPrefab != null && launchPoint != null && canLaunch)
         {
+            // Check if we can spawn more Pikmin
+            bool canSpawn = true;
+            string limitMessage = "";
+            
+            if (PikminManager.Instance != null)
+            {
+                // Manager exists, check its limit
+                if (!PikminManager.Instance.CanRegisterMorePikmin())
+                {
+                    canSpawn = false;
+                    limitMessage = $"Pikmin limit reached! ({PikminManager.Instance.GetPikminCount()}/{PikminManager.Instance.GetMaxPikmin()})";
+                }
+            }
+            else
+            {
+                // No manager, check if Pikmin script has a standalone limit
+                // You could implement a static counter in Pikmin script if needed
+                // For now, we'll allow spawning without manager
+            }
+            
+            if (!canSpawn)
+            {
+                Debug.LogWarning(limitMessage);
+                
+                // Optional: Show UI feedback
+                if (limitReachedUI != null)
+                {
+                    limitReachedUI.SetActive(true);
+                    // Hide it after a few seconds
+                    Invoke(nameof(HideLimitUI), 2f);
+                }
+                
+                // Flash the trajectory line
+                if (trajectoryLine != null && showLimitWarning)
+                {
+                    StartCoroutine(FlashTrajectory());
+                }
+                
+                StopAiming();
+                return;
+            }
+            
             // Spawn pikmin
             GameObject pikmin = Instantiate(pikminPrefab, launchPoint.position, Quaternion.identity);
             
@@ -326,6 +439,20 @@ public class PikminLauncher : MonoBehaviour
             {
                 Debug.LogError("Spawned Pikmin has no Rigidbody!");
             }
+            
+            // Register with PikminManager if available
+            Pikmin pikminComponent = pikmin.GetComponent<Pikmin>();
+            if (pikminComponent != null && PikminManager.Instance != null)
+            {
+                // The manager will handle registration when the Pikmin lands and is ready
+                // Or you can register immediately if you prefer
+                // PikminManager.Instance.RegisterPikmin(pikminComponent);
+                
+                if (showDebugInfo)
+                {
+                    Debug.Log($"Current Pikmin count: {PikminManager.Instance.GetPikminCount()}/{PikminManager.Instance.GetMaxPikmin()}");
+                }
+            }
         }
         
         StopAiming();
@@ -341,7 +468,7 @@ public class PikminLauncher : MonoBehaviour
             
             if (canLaunch)
             {
-                Gizmos.color = Color.green;
+                Gizmos.color = IsAtPikminLimit() ? limitReachedTrajectoryColor : Color.green;
                 Gizmos.DrawWireSphere(targetPoint, 0.5f);
                 
                 // Draw launch direction
@@ -355,6 +482,37 @@ public class PikminLauncher : MonoBehaviour
         {
             Gizmos.color = Color.blue;
             Gizmos.DrawWireSphere(launchPoint.position, 0.2f);
+        }
+    }
+    
+    void HideLimitUI()
+    {
+        if (limitReachedUI != null)
+        {
+            limitReachedUI.SetActive(false);
+        }
+    }
+    
+    System.Collections.IEnumerator FlashTrajectory()
+    {
+        if (trajectoryLine != null)
+        {
+            Color originalColor = trajectoryLine.startColor;
+            
+            // Flash red 3 times
+            for (int i = 0; i < 3; i++)
+            {
+                trajectoryLine.startColor = Color.red;
+                trajectoryLine.endColor = Color.red;
+                yield return new WaitForSeconds(0.1f);
+                
+                trajectoryLine.startColor = limitReachedTrajectoryColor;
+                trajectoryLine.endColor = limitReachedTrajectoryColor;
+                yield return new WaitForSeconds(0.1f);
+            }
+            
+            trajectoryLine.startColor = originalColor;
+            trajectoryLine.endColor = originalColor;
         }
     }
 }
