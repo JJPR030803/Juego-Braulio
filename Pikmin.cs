@@ -35,10 +35,12 @@ public class Pikmin : MonoBehaviour
     private float landingTime = 0f;
     private bool canFollow = false;
     private Vector3 targetPosition;
+    private bool isRegisteredWithManager = false;
     
-    // Optional: For formations
-    private static int pikminCount = 0;
-    private int myIndex;
+    // Formation position assigned by manager (or self-calculated)
+    private Vector3 formationOffset;
+    private int formationIndex = -1;
+    private static int totalPikminCount = 0;
     
     void Start()
     {
@@ -61,32 +63,64 @@ public class Pikmin : MonoBehaviour
             rb.useGravity = false; // We'll apply custom gravity
         }
         
-        // Auto find player
-        if (autoFindPlayer)
+        // Try to find PikminManager first
+        if (PikminManager.Instance != null)
         {
+            // Manager exists, let it handle player assignment
+            playerTransform = PikminManager.Instance.GetPlayerTransform();
+        }
+        else if (autoFindPlayer)
+        {
+            // No manager, find player ourselves
             GameObject player = GameObject.FindGameObjectWithTag(playerTag);
             if (player != null)
             {
                 playerTransform = player.transform;
+                // Assign formation index for standalone operation
+                formationIndex = totalPikminCount++;
             }
             else
             {
                 Debug.LogWarning($"Pikmin: No GameObject with tag '{playerTag}' found!");
             }
         }
-        
-        // Assign index for formation
-        myIndex = pikminCount++;
     }
     
     void OnDestroy()
     {
-        pikminCount--;
+        // Unregister from manager if registered
+        if (isRegisteredWithManager && PikminManager.Instance != null)
+        {
+            PikminManager.Instance.UnregisterPikmin(this);
+        }
+        
+        // Decrement count if not using manager
+        if (formationIndex >= 0)
+        {
+            totalPikminCount--;
+        }
     }
     
     public void SetPlayer(Transform player)
     {
         playerTransform = player;
+        
+        // If player is null, we're being dismissed
+        if (player == null)
+        {
+            canFollow = false;
+            isRegisteredWithManager = false;
+        }
+    }
+    
+    public void SetFormationOffset(Vector3 offset)
+    {
+        formationOffset = offset;
+    }
+    
+    public void SetFormationIndex(int index)
+    {
+        formationIndex = index;
     }
     
     void Update()
@@ -119,6 +153,16 @@ public class Pikmin : MonoBehaviour
         if (hasLanded && !canFollow && Time.time - landingTime > followDelay)
         {
             canFollow = true;
+            
+            // Try to register with manager when ready to follow
+            if (!isRegisteredWithManager && PikminManager.Instance != null)
+            {
+                if (PikminManager.Instance.RegisterPikmin(this))
+                {
+                    isRegisteredWithManager = true;
+                    // Manager will handle formation position
+                }
+            }
         }
     }
     
@@ -141,9 +185,18 @@ public class Pikmin : MonoBehaviour
     {
         if (!isGrounded) return;
         
-        // Calculate formation position
-        Vector3 formationOffset = CalculateFormationOffset(myIndex);
-        targetPosition = playerTransform.position + formationOffset;
+        // Calculate target position
+        if (isRegisteredWithManager)
+        {
+            // Use manager-assigned position
+            targetPosition = playerTransform.position + formationOffset;
+        }
+        else
+        {
+            // Calculate our own formation position
+            Vector3 offset = CalculateStandaloneFormationOffset(formationIndex);
+            targetPosition = playerTransform.position + offset;
+        }
         
         // Calculate distance to target
         Vector3 directionToTarget = targetPosition - transform.position;
@@ -181,9 +234,9 @@ public class Pikmin : MonoBehaviour
         }
     }
     
-    Vector3 CalculateFormationOffset(int index)
+    Vector3 CalculateStandaloneFormationOffset(int index)
     {
-        // Create a circular formation around the player
+        // Simple circular formation for standalone operation
         float angle = (index * 45f) * Mathf.Deg2Rad; // 45 degrees between each pikmin
         float radius = followDistance + (index / 8) * 0.5f; // Expand radius for every 8 pikmin
         
@@ -263,6 +316,16 @@ public class Pikmin : MonoBehaviour
                 }
             }
         }
+    }
+    
+    public bool IsFollowing()
+    {
+        return canFollow && playerTransform != null;
+    }
+    
+    public bool IsRegisteredWithManager()
+    {
+        return isRegisteredWithManager;
     }
     
     void OnDrawGizmosSelected()
