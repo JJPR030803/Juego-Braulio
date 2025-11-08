@@ -21,6 +21,9 @@ public class PikminManager : MonoBehaviour
     [Header("Visual Feedback")]
     [SerializeField] private GameObject whistleEffectPrefab; // Optional whistle effect
     
+    [Header("Debug")]
+    [SerializeField] private bool showDebugInfo = true;
+    
     public enum FormationType
     {
         Circle,
@@ -51,6 +54,7 @@ public class PikminManager : MonoBehaviour
         else if (instance != this)
         {
             Destroy(gameObject);
+            return;
         }
         
         if (playerTransform == null)
@@ -59,6 +63,10 @@ public class PikminManager : MonoBehaviour
             if (player != null)
             {
                 playerTransform = player.transform;
+            }
+            else
+            {
+                Debug.LogError("PikminManager: No player found with 'Player' tag!");
             }
         }
     }
@@ -76,18 +84,56 @@ public class PikminManager : MonoBehaviour
             WhistleForPikmin();
         }
         
-        // Update formations
+        // Change formations with number keys (optional)
+        if (Input.GetKeyDown(KeyCode.Alpha1))
+            ChangeFormation(FormationType.Circle);
+        if (Input.GetKeyDown(KeyCode.Alpha2))
+            ChangeFormation(FormationType.Square);
+        if (Input.GetKeyDown(KeyCode.Alpha3))
+            ChangeFormation(FormationType.Triangle);
+        if (Input.GetKeyDown(KeyCode.Alpha4))
+            ChangeFormation(FormationType.Line);
+        
+        // Update formations continuously
         UpdateFormations();
+        
+        // Clean up null entries periodically
+        CleanupNullPikmin();
     }
     
-    public void RegisterPikmin(Pikmin pikmin)
+    public bool RegisterPikmin(Pikmin pikmin)
     {
-        if (!activePikmin.Contains(pikmin) && activePikmin.Count < maxPikmin)
+        if (pikmin == null) return false;
+        
+        // Check if already registered
+        if (activePikmin.Contains(pikmin))
         {
-            activePikmin.Add(pikmin);
-            pikmin.SetPlayer(playerTransform);
-            AssignFormationPosition(pikmin, activePikmin.Count - 1);
+            if (showDebugInfo)
+                Debug.Log("Pikmin already registered!");
+            return true;
         }
+        
+        // Check limit
+        if (activePikmin.Count >= maxPikmin)
+        {
+            if (showDebugInfo)
+                Debug.LogWarning($"Cannot register Pikmin - limit reached ({maxPikmin})!");
+            return false;
+        }
+        
+        // Register the pikmin
+        activePikmin.Add(pikmin);
+        pikmin.SetPlayer(playerTransform);
+        
+        // Assign formation position
+        int index = activePikmin.Count - 1;
+        pikmin.SetFormationIndex(index);
+        UpdatePikminFormationPosition(pikmin, index);
+        
+        if (showDebugInfo)
+            Debug.Log($"Registered Pikmin. Total: {activePikmin.Count}");
+        
+        return true;
     }
     
     public void UnregisterPikmin(Pikmin pikmin)
@@ -95,6 +141,13 @@ public class PikminManager : MonoBehaviour
         if (activePikmin.Contains(pikmin))
         {
             activePikmin.Remove(pikmin);
+            
+            // Don't set player to null here - let the pikmin decide
+            
+            if (showDebugInfo)
+                Debug.Log($"Unregistered Pikmin. Total: {activePikmin.Count}");
+            
+            // Reorganize formation
             ReorganizeFormation();
         }
     }
@@ -108,24 +161,15 @@ public class PikminManager : MonoBehaviour
                 pikmin.SetPlayer(null);
             }
         }
+        
         activePikmin.Clear();
-        Debug.Log("All Pikmin dismissed!");
+        
+        if (showDebugInfo)
+            Debug.Log("All Pikmin dismissed!");
     }
     
     void WhistleForPikmin()
     {
-        // Find all Pikmin in radius
-        Collider[] colliders = Physics.OverlapSphere(playerTransform.position, whistleRadius);
-        
-        foreach (Collider col in colliders)
-        {
-            Pikmin pikmin = col.GetComponent<Pikmin>();
-            if (pikmin != null && !activePikmin.Contains(pikmin))
-            {
-                RegisterPikmin(pikmin);
-            }
-        }
-        
         // Show whistle effect
         if (whistleEffectPrefab != null)
         {
@@ -133,7 +177,24 @@ public class PikminManager : MonoBehaviour
             Destroy(effect, 2f);
         }
         
-        Debug.Log($"Whistled! {activePikmin.Count} Pikmin following.");
+        // Find all Pikmin in radius
+        Collider[] colliders = Physics.OverlapSphere(playerTransform.position, whistleRadius);
+        int whistledCount = 0;
+        
+        foreach (Collider col in colliders)
+        {
+            Pikmin pikmin = col.GetComponent<Pikmin>();
+            if (pikmin != null && pikmin.IsFollowing() && !pikmin.IsRegisteredWithManager())
+            {
+                if (RegisterPikmin(pikmin))
+                {
+                    whistledCount++;
+                }
+            }
+        }
+        
+        if (showDebugInfo)
+            Debug.Log($"Whistled! Added {whistledCount} new Pikmin. Total: {activePikmin.Count}");
     }
     
     void UpdateFormations()
@@ -142,15 +203,16 @@ public class PikminManager : MonoBehaviour
         {
             if (activePikmin[i] != null)
             {
-                AssignFormationPosition(activePikmin[i], i);
+                UpdatePikminFormationPosition(activePikmin[i], i);
             }
         }
     }
     
-    void AssignFormationPosition(Pikmin pikmin, int index)
+    void UpdatePikminFormationPosition(Pikmin pikmin, int index)
     {
         Vector3 offset = GetFormationOffset(index);
-        // The Pikmin script will handle the actual movement to this position
+        pikmin.SetFormationOffset(offset);
+        pikmin.SetFormationIndex(index);
     }
     
     Vector3 GetFormationOffset(int index)
@@ -172,8 +234,12 @@ public class PikminManager : MonoBehaviour
     
     Vector3 GetCircleFormation(int index)
     {
-        float angle = (index * 360f / Mathf.Max(8, activePikmin.Count)) * Mathf.Deg2Rad;
-        float radius = formationSpacing + (index / 8) * formationSpacing * 0.5f;
+        int pikminsInRing = 8;
+        int ring = index / pikminsInRing;
+        int posInRing = index % pikminsInRing;
+        
+        float angle = (posInRing * 360f / pikminsInRing) * Mathf.Deg2Rad;
+        float radius = formationSpacing * (1 + ring);
         
         float x = Mathf.Cos(angle) * radius;
         float z = Mathf.Sin(angle) * radius;
@@ -187,7 +253,7 @@ public class PikminManager : MonoBehaviour
         int col = index % pikminsPerRow;
         
         float x = (col - pikminsPerRow / 2f) * formationSpacing;
-        float z = -row * formationSpacing - formationSpacing;
+        float z = -row * formationSpacing - formationSpacing * 2;
         
         return new Vector3(x, 0, z);
     }
@@ -209,7 +275,7 @@ public class PikminManager : MonoBehaviour
         posInRow = index - totalPikmin;
         
         float x = (posInRow - row * 0.5f) * formationSpacing;
-        float z = -row * formationSpacing - formationSpacing;
+        float z = -row * formationSpacing - formationSpacing * 2;
         
         return new Vector3(x, 0, z);
     }
@@ -220,7 +286,7 @@ public class PikminManager : MonoBehaviour
         int col = index % pikminsPerRow;
         
         float x = (col - pikminsPerRow / 2f) * formationSpacing * 0.5f;
-        float z = -index * formationSpacing * 0.3f - formationSpacing;
+        float z = -index * formationSpacing * 0.3f - formationSpacing * 2;
         
         return new Vector3(x, 0, z);
     }
@@ -231,7 +297,25 @@ public class PikminManager : MonoBehaviour
         activePikmin.RemoveAll(p => p == null);
         
         // Reassign positions
-        UpdateFormations();
+        for (int i = 0; i < activePikmin.Count; i++)
+        {
+            UpdatePikminFormationPosition(activePikmin[i], i);
+        }
+    }
+    
+    void CleanupNullPikmin()
+    {
+        // Remove destroyed pikmin every few seconds
+        if (Time.frameCount % 120 == 0) // Every ~2 seconds at 60fps
+        {
+            int removed = activePikmin.RemoveAll(p => p == null);
+            if (removed > 0)
+            {
+                ReorganizeFormation();
+                if (showDebugInfo)
+                    Debug.Log($"Cleaned up {removed} null Pikmin entries");
+            }
+        }
     }
     
     void OnDrawGizmosSelected()
@@ -241,11 +325,35 @@ public class PikminManager : MonoBehaviour
             // Draw whistle radius
             Gizmos.color = new Color(0, 1, 1, 0.3f);
             Gizmos.DrawWireSphere(playerTransform.position, whistleRadius);
+            
+            // Draw formation preview
+            Gizmos.color = Color.yellow;
+            for (int i = 0; i < Mathf.Min(20, maxPikmin); i++)
+            {
+                Vector3 offset = GetFormationOffset(i);
+                Vector3 pos = playerTransform.position + offset;
+                Gizmos.DrawWireSphere(pos, 0.2f);
+            }
         }
     }
     
     // Public methods for other scripts
     public int GetPikminCount() => activePikmin.Count;
+    public int GetMaxPikmin() => maxPikmin;
+    public Transform GetPlayerTransform() => playerTransform;
     public List<Pikmin> GetActivePikmin() => new List<Pikmin>(activePikmin);
-    public void ChangeFormation(FormationType newFormation) => formationType = newFormation;
+    
+    public void ChangeFormation(FormationType newFormation)
+    {
+        formationType = newFormation;
+        ReorganizeFormation();
+        
+        if (showDebugInfo)
+            Debug.Log($"Changed formation to: {newFormation}");
+    }
+    
+    public bool CanRegisterMorePikmin()
+    {
+        return activePikmin.Count < maxPikmin;
+    }
 }
