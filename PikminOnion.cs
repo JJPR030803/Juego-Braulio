@@ -38,9 +38,31 @@ public class PikminOnion : MonoBehaviour
     [SerializeField] private bool autoSpawnEnabled = false;
     [SerializeField] private float autoSpawnInterval = 5f;
 
+    [Header("Activation Settings")]
+    [SerializeField] private bool startDeactivated = true; // Start buried in ground
+    [SerializeField] private float buriedDepth = 3f; // How deep the onion is buried
+    [SerializeField] private float riseSpeed = 2f; // Speed of rising from ground
+    [SerializeField] private float activationRadius = 3f; // How close player needs to be to activate
+    [SerializeField] private string playerTag = "Player";
+    [SerializeField] private bool requirePlayerTouch = true; // If false, player just needs to be nearby
+    [SerializeField] private ParticleSystem activationEffect;
+
     [Header("Debug")]
     [SerializeField] private bool showDebugInfo = true;
     [SerializeField] private bool showGizmos = true;
+
+    // Activation state
+    public enum OnionState
+    {
+        Buried,      // Hidden underground, inactive
+        Rising,      // Currently emerging from ground
+        Active       // Fully emerged and functional
+    }
+
+    private OnionState currentState = OnionState.Buried;
+    private Vector3 buriedPosition;
+    private Vector3 activePosition;
+    private bool isActivating = false;
 
     private Queue<int> pikminToSpawn = new Queue<int>(); // Queue of Pikmin waiting to spawn
     private List<GameObject> currentlySpawning = new List<GameObject>();
@@ -68,6 +90,33 @@ public class PikminOnion : MonoBehaviour
             Debug.LogError($"[PikminOnion] No Pikmin prefab assigned to {gameObject.name}!");
         }
 
+        // Setup activation state
+        if (startDeactivated)
+        {
+            // Store the active position (current position)
+            activePosition = transform.position;
+
+            // Calculate buried position
+            buriedPosition = transform.position - Vector3.up * buriedDepth;
+
+            // Move onion underground
+            transform.position = buriedPosition;
+            currentState = OnionState.Buried;
+
+            if (showDebugInfo)
+                Debug.Log($"[PikminOnion] Starting in BURIED state at {buriedPosition}");
+        }
+        else
+        {
+            // Start active
+            activePosition = transform.position;
+            buriedPosition = transform.position - Vector3.up * buriedDepth;
+            currentState = OnionState.Active;
+
+            if (showDebugInfo)
+                Debug.Log($"[PikminOnion] Starting in ACTIVE state");
+        }
+
         if (showDebugInfo)
         {
             Debug.Log($"[PikminOnion] Initialized with {currentPikminCount} Pikmin stored");
@@ -76,22 +125,151 @@ public class PikminOnion : MonoBehaviour
 
     void Update()
     {
-        // Handle spawning queue
-        ProcessSpawnQueue();
-
-        // Auto spawn if enabled
-        if (autoSpawnEnabled && Time.time - lastAutoSpawnTime >= autoSpawnInterval)
+        // Check for player activation if buried
+        if (currentState == OnionState.Buried)
         {
-            if (currentPikminCount > 0 && PikminManager.Instance != null &&
-                PikminManager.Instance.CanRegisterMorePikmin())
-            {
-                RequestSpawnPikmin(1);
-                lastAutoSpawnTime = Time.time;
-            }
+            CheckForPlayerActivation();
         }
 
-        // Process incoming pellets
-        ProcessIncomingPellets();
+        // Only process spawning/pellets when active
+        if (currentState == OnionState.Active)
+        {
+            // Handle spawning queue
+            ProcessSpawnQueue();
+
+            // Auto spawn if enabled
+            if (autoSpawnEnabled && Time.time - lastAutoSpawnTime >= autoSpawnInterval)
+            {
+                if (currentPikminCount > 0 && PikminManager.Instance != null &&
+                    PikminManager.Instance.CanRegisterMorePikmin())
+                {
+                    RequestSpawnPikmin(1);
+                    lastAutoSpawnTime = Time.time;
+                }
+            }
+
+            // Process incoming pellets
+            ProcessIncomingPellets();
+        }
+    }
+
+    /// <summary>
+    /// Check if player is nearby to activate the onion
+    /// </summary>
+    void CheckForPlayerActivation()
+    {
+        if (isActivating) return;
+
+        // Find player if proximity activation is enabled
+        if (!requirePlayerTouch)
+        {
+            GameObject player = GameObject.FindGameObjectWithTag(playerTag);
+            if (player != null)
+            {
+                float distance = Vector3.Distance(transform.position, player.transform.position);
+                if (distance <= activationRadius)
+                {
+                    ActivateOnion();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Activate the onion (can be called externally too)
+    /// </summary>
+    public void ActivateOnion()
+    {
+        if (currentState != OnionState.Buried || isActivating) return;
+
+        if (showDebugInfo)
+            Debug.Log("[PikminOnion] Activating onion! Rising from ground...");
+
+        isActivating = true;
+        currentState = OnionState.Rising;
+        StartCoroutine(RiseFromGround());
+
+        // Play activation effect
+        if (activationEffect != null)
+        {
+            activationEffect.Play();
+        }
+
+        // Play ground dig effect
+        if (groundDigEffect != null)
+        {
+            GameObject digFX = Instantiate(groundDigEffect, activePosition, Quaternion.identity);
+            Destroy(digFX, 3f);
+        }
+    }
+
+    /// <summary>
+    /// Coroutine to handle the onion rising from underground
+    /// </summary>
+    IEnumerator RiseFromGround()
+    {
+        Vector3 startPos = buriedPosition;
+        Vector3 targetPos = activePosition;
+        float distance = Vector3.Distance(startPos, targetPos);
+        float duration = distance / riseSpeed;
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+
+            // Ease out curve for smooth deceleration
+            float easedT = 1f - Mathf.Pow(1f - t, 3f);
+
+            transform.position = Vector3.Lerp(startPos, targetPos, easedT);
+
+            yield return null;
+        }
+
+        // Ensure final position
+        transform.position = activePosition;
+
+        // Activate glow effect if available
+        if (onionGlowEffect != null)
+        {
+            onionGlowEffect.Play();
+        }
+
+        // Set state to active
+        currentState = OnionState.Active;
+        isActivating = false;
+
+        if (showDebugInfo)
+            Debug.Log("[PikminOnion] Onion is now ACTIVE!");
+    }
+
+    /// <summary>
+    /// Triggered when player touches the onion (for touch-based activation)
+    /// </summary>
+    void OnTriggerEnter(Collider other)
+    {
+        if (requirePlayerTouch && currentState == OnionState.Buried)
+        {
+            if (other.CompareTag(playerTag))
+            {
+                ActivateOnion();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Alternative collision-based activation
+    /// </summary>
+    void OnCollisionEnter(Collision collision)
+    {
+        if (requirePlayerTouch && currentState == OnionState.Buried)
+        {
+            if (collision.gameObject.CompareTag(playerTag))
+            {
+                ActivateOnion();
+            }
+        }
     }
 
     /// <summary>
@@ -260,7 +438,7 @@ public class PikminOnion : MonoBehaviour
             if (rb != null)
             {
                 rb.isKinematic = false;
-                rb.velocity = Vector3.zero;
+                rb.linearVelocity = Vector3.zero;
             }
 
             // Re-enable Pikmin AI
@@ -398,10 +576,34 @@ public class PikminOnion : MonoBehaviour
     public int GetMaxStorage() => maxPikminInOnion;
     public int GetQueuedSpawnCount() => pikminToSpawn.Count;
     public bool IsFull() => currentPikminCount >= maxPikminInOnion;
+    public OnionState GetCurrentState() => currentState;
+    public bool IsActive() => currentState == OnionState.Active;
 
     void OnDrawGizmosSelected()
     {
         if (!showGizmos) return;
+
+        // Draw activation state visualization
+        if (startDeactivated)
+        {
+            // Draw buried position
+            Vector3 buriedPos = Application.isPlaying ? buriedPosition : transform.position - Vector3.up * buriedDepth;
+            Gizmos.color = new Color(0.5f, 0.3f, 0.1f, 0.5f); // Brown for buried
+            Gizmos.DrawWireSphere(buriedPos, 1f);
+            Gizmos.DrawLine(buriedPos, buriedPos + Vector3.up * buriedDepth);
+
+            // Draw active position
+            Vector3 activePos = Application.isPlaying ? activePosition : transform.position;
+            Gizmos.color = new Color(0, 1, 1, 0.5f); // Cyan for active
+            Gizmos.DrawWireSphere(activePos, 1f);
+
+            // Draw activation radius if using proximity activation
+            if (!requirePlayerTouch)
+            {
+                Gizmos.color = new Color(1, 1, 0, 0.3f);
+                Gizmos.DrawWireSphere(buriedPos, activationRadius);
+            }
+        }
 
         if (spawnPoint != null)
         {
@@ -409,7 +611,7 @@ public class PikminOnion : MonoBehaviour
             Gizmos.color = Color.green;
             Gizmos.DrawWireSphere(spawnPoint.position, spawnRadius);
 
-            // Draw underground start position
+            // Draw underground start position for Pikmin spawns
             Gizmos.color = Color.red;
             Gizmos.DrawWireSphere(spawnPoint.position - Vector3.up * digDepth, 0.5f);
         }
